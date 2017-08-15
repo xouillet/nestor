@@ -70,6 +70,8 @@ def main(path):
             raise Exception("File not found")
 
     mimetype = mimetypes.guess_type(path)
+    if path.endswith('.css'):
+        mimetype = 'text/css'
     return static_file(path, root=DATA_DIR, mimetype=mimetype)
 
 if __name__ == '__main__':
