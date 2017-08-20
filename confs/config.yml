@@ -1,0 +1,9 @@
+secret: verysecretandnottoberememberedstring
+password: qwerty123
+
+data_dir: data/
+url_prefix: /
+
+background_path: /bg
+allowed_paths:
+  - /static

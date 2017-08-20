@@ -4,6 +4,8 @@
 import os
 import mimetypes
 import random
+import json
+import yaml
 
 from bottle import default_app, run, \
                    get, post, \
@@ -11,29 +13,66 @@ from bottle import default_app, run, \
                    request, response
 
 mimetypes.init()
-mimetypes.add_type('text/css', '.css') 
+mimetypes.add_type('text/css', 'css') 
 
 #
 # Configuration
 #
 
-DATA_DIR = os.environ.get('NESTOR_DATADIR', 'data')  # Data containing file to be served
-URL_PREFIX =  os.environ.get('NESTOR_PREFIX', '')  # Prefix for routing url, useful when reverse-proxyfing
-INDEX = ['index.html']
-SECRET = 'seikaGh7eeK4satuFae0yohbnai4pieYAhH1thai'  # Secret for crypting the cookie
-BACKGROUND_DIR = os.environ.get('NESTOR_BACKGROUND_DIR', None)
-PASSWORD = os.environ.get('NESTOR_PASSWORD')
+class ConfigDict(dict):
+    def __init__(self, *args, **kwargs):
+        super(ConfigDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
+
+# Default config
+
+config = ConfigDict({'data_dir': 'data', # Directory containing files to be served
+                     'url_prefix': '', # Prefix for routing url, useful when reverse-proxyfing
+                     'secret': None, # Secret for crypting the cookie, should be overwritten in config
+                     'index': ['index.html'], # List of files to try when path is a directory
+                     'allowed_paths': [], # Always allowed paths, typically static such as js/css
+                     'background_path': None, # Path (relative to url_prefix) containing background images to use with login
+                     'password': None # Password to access site
+                   })
+
+yaml_config_path = os.environ.get('NESTOR_CONFIG')
+if yaml_config_path:
+    with open(yaml_config_path, 'r') as yaml_config:
+        config.update(yaml.load(yaml_config))
+
+config_json = os.environ.get('NESTOR_CONFIG_JSON')
+if config_json:
+    config.update(config_json)
+
+# If background_path is present, add it to allowed_paths
+if config.background_path:
+    config.allowed_paths.append(config.background_path)
+
+# Strip / on url_prefix and background_path
+config.background_path = config.background_path.strip('/')
+config.url_prefix = config.url_prefix.strip('/')
+
+# Some checks
+if config.secret is None:
+    raise Exception("Please define a secret")
 
 #
 # Cookie content
 #
-def truncate_path(path, level):
-    return '/'.join(path.split('/')[:level])
-
 class Auths(list):
+    """ This class herits from list to add the check method 
+        A typical auth list contains paths. 
+        When a path is allowed, all its subfolder also are
+
+        For example:
+         * '/': Whole site is allowed
+         * '/album/subalbum': Only subalbum is allowed
+    """
+
     def check(self, _path):
-        for (level, path) in self:
-            if truncate_path(path, level) == truncate_path(_path, level):
+        """" Checks that _path is allowed with current auth list """
+        for path in self:
+            if _path.startswith(path):
                 return True 
         return False
 
@@ -41,38 +80,44 @@ class Auths(list):
 # Main route
 #
 
-@post(URL_PREFIX+'<path:path>')
+@post(config.url_prefix+'<path:path>')
 def auth(path):
+    """ POST view: Check for login """
+
     password = request.forms.get('password')
-    cookie = request.get_cookie("nestor", secret=SECRET) or []
-    if password == PASSWORD:
-        cookie.append((0, '/'))
-        response.set_cookie("nestor", cookie, secret=SECRET, path="/")
+    cookie = request.get_cookie("nestor", secret=config.secret) or []
+    if password == config.password:
+        cookie.append('/')
+        response.set_cookie("nestor", cookie, secret=config.secret, path=config.url_prefix)
 
-    return redirect(URL_PREFIX+path)
+    return redirect(config.url_prefix+path)
 
-@get(URL_PREFIX+'<path:path>')
+@get(config.url_prefix+'<path:path>')
 def main(path):
-    cookie = request.get_cookie("nestor", secret=SECRET)
-    if not ((isinstance(cookie, list) and Auths(cookie).check(path)) or
-            (BACKGROUND_DIR is not None and path[1:].startswith(BACKGROUND_DIR))):
-        if BACKGROUND_DIR:
-            background=URL_PREFIX+'/'+BACKGROUND_DIR+random.choice(os.listdir(os.path.join(DATA_DIR, BACKGROUND_DIR)))
-        else:
-            background=''
-        return template('login', background=background)
+    """ Main view: Check cookie and serve file """
+
+    cookie = request.get_cookie("nestor", secret=config.secret)
+
+    for allowed_path in config.allowed_paths:
+        if path.startswith(allowed_path):
+            break
+    else:
+        if not (isinstance(cookie, list) and Auths(cookie).check(path)):
+            if config.background_path:
+                background = os.path.join(config.url_prefix, config.background_path, random.choice(os.listdir(os.path.join(config.data_dir, config.background_path))))
+            else:
+                background=''
+            return template('login', background=background)
 
     if path.endswith('/'):
-        for path in INDEX:
-            if os.path.exists(os.path.join(DATA_DIR, path)):
+        for path in config.index:
+            if os.path.exists(os.path.join(config.data_dir, path)):
                 break
         else:
             raise Exception("File not found")
 
-    mimetype = mimetypes.guess_type(path)
-    if path.endswith('.css'):
-        mimetype = 'text/css'
-    return static_file(path, root=DATA_DIR, mimetype=mimetype)
+    mimetype = mimetypes.guess_type(path)[0]
+    return static_file(path, root=config.data_dir, mimetype=mimetype)
 
 if __name__ == '__main__':
     run(reloader=True)
