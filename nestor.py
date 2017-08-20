@@ -46,11 +46,11 @@ if config_json:
 
 # If background_path is present, add it to allowed_paths
 if config.background_path:
+    config.background_path = config.background_path.strip('/')
     config.allowed_paths.append(config.background_path)
 
 # Strip / on url_prefix and background_path
-config.background_path = config.background_path.strip('/')
-config.url_prefix = config.url_prefix.strip('/')
+config.url_prefix = config.url_prefix.rstrip('/')
 
 # Some checks
 if config.secret is None:
@@ -88,7 +88,7 @@ def auth(path):
     cookie = request.get_cookie("nestor", secret=config.secret) or []
     if password == config.password:
         cookie.append('/')
-        response.set_cookie("nestor", cookie, secret=config.secret, path=config.url_prefix)
+        response.set_cookie("nestor", cookie, secret=config.secret, path=config.url_prefix+'/')
 
     return redirect(config.url_prefix+path)
 
@@ -120,6 +120,6 @@ def main(path):
     return static_file(path, root=config.data_dir, mimetype=mimetype)
 
 if __name__ == '__main__':
-    run(reloader=True)
+    run(reloader=True, host='0.0.0.0', port=7666, debug=True)
 else :
     app = application = default_app()
