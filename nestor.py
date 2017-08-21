@@ -110,8 +110,9 @@ def main(path):
             return template('login', background=background)
 
     if path.endswith('/'):
-        for path in config.index:
-            if os.path.exists(os.path.join(config.data_dir, path)):
+        for index in config.index:
+            if os.path.exists(os.path.join(config.data_dir, path.strip('/'), index)):
+                path = path+index
                 break
         else:
             raise Exception("File not found")
