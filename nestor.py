@@ -87,7 +87,7 @@ def auth(path):
     password = request.forms.get('password')
     cookie = request.get_cookie("nestor", secret=config.secret) or []
     if password == config.password:
-        cookie.append('/')
+        cookie.append('')
         response.set_cookie("nestor", cookie, secret=config.secret, path=config.url_prefix+'/')
 
     return redirect(config.url_prefix+path)
@@ -98,18 +98,19 @@ def main(path):
 
     cookie = request.get_cookie("nestor", secret=config.secret)
 
+    path = path.lstrip('/')
     for allowed_path in config.allowed_paths:
-        if path[1:].startswith(allowed_path):
+        if path.startswith(allowed_path):
             break
     else:
         if not (isinstance(cookie, list) and Auths(cookie).check(path)):
             if config.background_path:
-                background = os.path.join(config.url_prefix, config.background_path, random.choice(os.listdir(os.path.join(config.data_dir, config.background_path))))
+                background = os.path.join('/', config.url_prefix, config.background_path, random.choice(os.listdir(os.path.join(config.data_dir, config.background_path))))
             else:
                 background=''
             return template('login', background=background)
 
-    if path.endswith('/'):
+    if path == '' or path.endswith('/'):
         for index in config.index:
             if os.path.exists(os.path.join(config.data_dir, path.strip('/'), index)):
                 path = path+index
