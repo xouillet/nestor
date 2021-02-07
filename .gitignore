@@ -1,4 +1,4 @@
 *.swp
 *.py
-data/
-confs/
+venv/
+__pycache__

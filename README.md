@@ -5,24 +5,72 @@ It can be used to protect sites generated from tools such as [sigal](https://git
 
 ## Prerequisites
 
-Nestor is written in [Python](http://www.python.org) and relies on [bottle](http://www.bottlepy.org)
+Nestor is written in [Python](https://www.python.org) and relies on [starlette](https://www.starlette.io/) framework
+
+Of course, using virtualenv is recommended
 
 ```
-pip install bottle
-pip install pyyaml
+virtualenv3 venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ## Configuration
 
-The configuration file is written in YAML. An example configuration is provided in `dist/config.yml`.
+Configuration is done via environment variable or using a `.env` file. Here is a list of options.
 
-See `nestor.py` for detailed configurations directives.
+### SECRET_KEY
+
+Required. This key is used to sign cookies. It should be private and has not to be remembered. It has no specific format restriction.
+
+### PASSWORD
+
+Required. The password that will be asked to the user
+
+### BG_PATH
+
+Optional. A path to the background image of the login page
 
 ## Usage
 
-Nestor is a wsgi app so it is meant to be used by wsgi server such as [uwsgi](https://github.com/unbit/uwsgi), [gunicorn](http://gunicorn.org/) or
-Apache's [mod_wsgi](https://modwsgi.readthedocs.io/en/develop/).
+Nestor is an ASGI application and should be started via an ASGI server such as `uvicorn`.
 
-The wsgi app is located in `nestor.py` and accept `NESTOR_CONFIG` environment parameter to specify which configuration to use
+```
+SECRET_KEY="verysecret" PASSWORD="pipo" uvicorn --root-path /nestor nestor:app
+```
 
-An example uwsgi configuration is provided in the `dist/` directory.
+Nestor aims to be used via the `ngx_http_auth_request_module` of nginx. Here is an example nginx configuration for nginx
+
+```
+    location /protected_folder {
+        auth_request /nestor/auth;
+        error_page 401 /nestor/login;
+    }
+
+    location /nestor/ {
+       proxy_pass http://unix:/srv/http/nestor/nestor.sock:/;
+       proxy_set_header Host $http_host;
+       proxy_set_header X-Original-URI $request_uri;
+       proxy_set_header X-Forwarded-Proto $scheme;
+    }
+```
+
+Nestor should be started via `gunicorn` or `uvicorn`, here is an example `systemd` service
+
+```
+# /etc/systemd/system/nestor.service
+[Unit]
+Description=Nestor
+After=network.target
+
+[Service]
+User=www-data
+LimitNOFILE=4096
+WorkingDirectory=/srv/http/nestor/
+ExecStart=/srv/http/nestor/venv/bin/uvicorn --proxy-headers --forwarded-allow-ips * --root-path /nestor --uds /srv/http/nestor/nestor.sock nestor:app
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```

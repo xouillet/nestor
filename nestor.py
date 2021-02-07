@@ -1,127 +1,129 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os
-import mimetypes
-import random
+import base64
+import hashlib
+import hmac
 import json
-import yaml
+import logging
 
-from bottle import default_app, run, \
-                   get, post, \
-                   static_file, template, redirect, \
-                   request, response
+from starlette.applications import Starlette
+from starlette.config import Config
+from starlette.datastructures import Secret
+from starlette.responses import RedirectResponse, Response
+from starlette.routing import Route
+from starlette.templating import Jinja2Templates
 
-mimetypes.init()
-mimetypes.add_type('text/css', 'css') 
 
-#
-# Configuration
-#
+templates = Jinja2Templates(directory="views")
 
-class ConfigDict(dict):
-    def __init__(self, *args, **kwargs):
-        super(ConfigDict, self).__init__(*args, **kwargs)
-        self.__dict__ = self
+logger = logging.getLogger("uvicorn")
+logger.setLevel(logging.DEBUG)
 
-# Default config
+# Config
 
-config = ConfigDict({'data_dir': 'data', # Directory containing files to be served
-                     'url_prefix': '', # Prefix for routing url, useful when reverse-proxyfing
-                     'secret': None, # Secret for crypting the cookie, should be overwritten in config
-                     'index': ['index.html'], # List of files to try when path is a directory
-                     'allowed_paths': [], # Always allowed paths, typically static such as js/css
-                     'background_path': None, # Path (relative to url_prefix) containing background images to use with login
-                     'password': None # Password to access site
-                   })
-
-yaml_config_path = os.environ.get('NESTOR_CONFIG')
-if yaml_config_path:
-    with open(yaml_config_path, 'r') as yaml_config:
-        config.update(yaml.load(yaml_config))
-
-config_json = os.environ.get('NESTOR_CONFIG_JSON')
-if config_json:
-    config.update(config_json)
-
-# If background_path is present, add it to allowed_paths
-if config.background_path:
-    config.background_path = config.background_path.strip('/')
-    config.allowed_paths.append(config.background_path)
-
-# Strip / on url_prefix and background_path
-config.url_prefix = config.url_prefix.rstrip('/')
-
-# Some checks
-if config.secret is None:
-    raise Exception("Please define a secret")
+config = Config(".env")
+SECRET_KEY = config("SECRET_KEY").encode("utf8")
+PASSWORD = config("PASSWORD", cast=Secret)
+BG_URL = config("BG_URL", default=None)
 
 #
-# Cookie content
+# Cookie content and helpers
 #
+
+
 class Auths(list):
-    """ This class herits from list to add the check method 
-        A typical auth list contains paths. 
-        When a path is allowed, all its subfolder also are
+    """This class herits from list to add the check method
+    A typical auth list contains paths.
+    When a path is allowed, all its subfolder also are
 
-        For example:
-         * '/': Whole site is allowed
-         * '/album/subalbum': Only subalbum is allowed
+    For example:
+     * '/': Whole site is allowed
+     * '/album/subalbum': Only subalbum is allowed
     """
 
     def check(self, _path):
         """" Checks that _path is allowed with current auth list """
         for path in self:
             if _path.startswith(path):
-                return True 
+                return True
         return False
 
+
+def decode_cookie(cookie):
+    """ Decode cookie content and check digest """
+
+    digest, data = base64.b64decode(cookie.encode("utf8")).split(b"|", 1)
+    assert digest == hmac.new(SECRET_KEY, data, digestmod=hashlib.sha256).digest()
+    return json.loads(data.decode("utf-8"))
+
+
+def encode_cookie(cookie):
+    """ Encode cookie with json inside base64 and add digest """
+    data = json.dumps(cookie).encode("utf-8")
+    return base64.b64encode(
+        hmac.new(SECRET_KEY, data, digestmod=hashlib.sha256).digest() + b"|" + data
+    ).decode("utf8")
+
+
+def check_login(request):
+    """ Helper that returns whether cookie allows current path """
+
+    try:
+        cookie = decode_cookie(request.cookies.get("nestor"))
+        assert isinstance(cookie, list)
+    except Exception as e:
+        logger.debug(f"Unable to decode cookie : {e}")
+        return False
+
+    return Auths(cookie).check(request.url.path)
+
+
 #
-# Main route
+# Routes
 #
 
-@post(config.url_prefix+'<path:path>')
-def auth(path):
+
+async def login(request):
     """ POST view: Check for login """
 
-    password = request.forms.get('password')
-    cookie = request.get_cookie("nestor", secret=config.secret) or []
-    if password == config.password:
-        cookie.append('')
-        response.set_cookie("nestor", cookie, secret=config.secret, path=config.url_prefix+'/')
+    redir = None
+    if request.method == "POST":
+        form = await request.form()
+        password = form.get("password")
+        redir = form.get("next", "/")
+        try:
+            cookie = decode_cookie(request.cookies.get("nestor"))
+        except Exception:
+            cookie = []
 
-    return redirect(config.url_prefix+path)
+        if password == str(PASSWORD):
+            logging.info("Allowed access")
+            cookie.append("")
+            response = RedirectResponse(url=redir, status_code=302)
+            response.set_cookie("nestor", encode_cookie(cookie), path="/")
+            return response
 
-@get(config.url_prefix+'<path:path>')
-def main(path):
-    """ Main view: Check cookie and serve file """
+    if check_login(request):
+        return RedirectResponse(url=redir or "/", status_code=302)
 
-    cookie = request.get_cookie("nestor", secret=config.secret)
+    return templates.TemplateResponse(
+        "login.html", context={"request": request, "redir": redir, "bg_url": BG_URL}
+    )
 
-    path = path.lstrip('/')
-    for allowed_path in config.allowed_paths:
-        if path.startswith(allowed_path):
-            break
+
+async def auth(request):
+    """ Auth check view, that will be called by ngx_http_auth_request_module """
+
+    if check_login(request):
+        return Response("", status_code=200)
     else:
-        if not (isinstance(cookie, list) and Auths(cookie).check(path)):
-            if config.background_path:
-                background = os.path.join('/', config.url_prefix, config.background_path, random.choice(os.listdir(os.path.join(config.data_dir, config.background_path))))
-            else:
-                background=''
-            return template('login', background=background)
+        return Response("", status_code=401)
 
-    if path == '' or path.endswith('/'):
-        for index in config.index:
-            if os.path.exists(os.path.join(config.data_dir, path.strip('/'), index)):
-                path = path+index
-                break
-        else:
-            raise Exception("File not found")
 
-    mimetype = mimetypes.guess_type(path)[0]
-    return static_file(path, root=config.data_dir, mimetype=mimetype)
+routes = [
+    Route("/login", login, methods=["GET", "POST"]),
+    Route("/auth", auth),
+]
 
-if __name__ == '__main__':
-    run(reloader=True, host='0.0.0.0', port=7666, debug=True)
-else :
-    app = application = default_app()
+app = Starlette(debug=True, routes=routes)
