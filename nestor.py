@@ -25,6 +25,8 @@ DEBUG = config("DEBUG", default=False)
 SECRET_KEY = config("SECRET_KEY").encode("utf8")
 PASSWORD = config("PASSWORD", cast=Secret)
 ADMIN_PASSWORD = config("ADMIN_PASSWORD", cast=Secret)
+AUTH_MODE = config("AUTH_MODE", default="http")
+AUTH_DOMAIN_URL = config("AUTH_DOMAIN_URL", default="")
 BG_URL = config("BG_URL", default=None)
 
 # Logging
@@ -75,6 +77,7 @@ def encode_authkey(paths):
 
 def check_login(request):
     """Helper that returns whether cookie allows current path"""
+    logger.debug("checking login...")
 
     try:
         paths = decode_authkey(request.cookies.get("nestor"))
@@ -84,7 +87,7 @@ def check_login(request):
         logger.debug(f"Unable to decode cookie : {e}")
         return False
 
-    return Auths(paths).check(request.headers['X-Original-URI'])
+    return Auths(paths).check(request.headers.get("x-original-uri") or request.headers.get("x-forwarded-uri"))
 
 
 class NestorCookieResponse(RedirectResponse):
@@ -131,6 +134,8 @@ async def link(request):
 
 async def login(request):
     """POST view: Check for login"""
+    logger.debug("login request")
+    logger.debug("headers : {}".format(request.headers))
 
     redir = None
     if request.method == "POST":
@@ -139,10 +144,11 @@ async def login(request):
         redir = form.get("next", "/")
 
         if password == str(PASSWORD):
-            logging.info("Allowed access")
+            logger.info("allowed access")
             return NestorCookieResponse(["/"], redir)  # Default is full access
 
     if check_login(request):
+        logger.debug("redirect : already logged in")
         return RedirectResponse(url=redir or "/", status_code=302)
 
     return templates.TemplateResponse(
@@ -150,20 +156,48 @@ async def login(request):
     )
 
 
-async def auth(request):
+async def auth_http(request):
     """Auth check view, that will be called by ngx_http_auth_request_module"""
+    logger.debug("auth request")
+    logger.debug("headers : {}".format(request.headers))
 
     if check_login(request):
         return Response("", status_code=200)
     else:
         return Response("", status_code=401)
 
+async def auth_domain(request):
+    """Auth check view, that will be called by Traefik domain-auth middleware"""
+    logger.debug("auth request")
+    logger.debug("headers : {}".format(request.headers))
+
+    if check_login(request):
+        return Response("", status_code=200)
+    else:
+        logger.debug("auth : redirect to login")
+        proto = request.headers.get("x-forwarded-proto", "")
+        host = request.headers.get("x-forwarded-host", "")
+        uri = request.headers.get("x-forwarded-uri", "/")
+        if proto and host:
+            params = {"redirect": proto + "://" + host + uri}
+            redirect_params = "?" + urllib.parse.urlencode(params, safe="")
+        else:
+            redirect_params = ""
+        return RedirectResponse(url=AUTH_DOMAIN_URL + "/login" + redirect_params, status_code=302)
 
 routes = [
     Route("/login", login, methods=["GET", "POST"]),
-    Route("/auth", auth),
-    Route("/admin", admin, methods=["POST"]),
-    Route("/link", link),
 ]
+
+if AUTH_MODE == "http":
+    routes += [
+        Route("/auth", auth_http),
+        Route("/admin", admin, methods=["POST"]),
+        Route("/link", link),
+    ]
+elif AUTH_MODE == "domain":
+    routes += [
+        Route("/auth", auth_domain),
+    ]
 
 app = Starlette(debug=DEBUG, routes=routes)
