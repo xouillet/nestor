@@ -27,9 +27,13 @@ Required. This key is used to sign cookies. It should be private and has not to 
 
 Required. The password that will be asked to the user
 
-### BG_PATH
+### ADMIN_PASSWORD
 
-Optional. A path to the background image of the login page
+Required. The password that will be used to configure (WIP)
+
+### BG_URL
+
+Optional. An URL to the background image of the login page
 
 ### AUTH_MODE
 
@@ -91,18 +95,22 @@ Nestor can also be used as a simplified single sign-on (SSO) authenticator in a 
 ```yaml
 # docker-compose.yml
   nestor:
-    build: ./nestor
-    container_name: "nestor"
-    env_file: ./nestor/nestor.env
+    image: ghcr.io/xouillet/nestor:master
+    environment:
+      AUTH_MODE: domain
+      AUTH_DOMAIN_URL: https://auth.mydomain.com
+      SECRET_KEY: "verysecret"
+      PASSWORD: "pipo"
+      ADMIN_PASSWORD: "pipoadmin"
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.nestor.rule=Host(`auth.mydomain.com`)"
       - "traefik.http.routers.nestor.tls=true"
       - "traefik.http.routers.nestor.tls.certresolver=letsencrypt"
-      - "traefik.http.middlewares.domain-auth.forwardauth.address=http://nestor:8123/auth"
+      - "traefik.http.middlewares.nestor.forwardauth.address=http://nestor:8123/auth"
 
   example-app:
     (...)
     labels:
-      - "traefik.http.routers.example-app.middlewares=domain-auth"
+      - "traefik.http.routers.example-app.middlewares=nestor"
 ```
