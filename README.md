@@ -106,23 +106,3 @@ Nestor can also be used as a simplified single sign-on (SSO) authenticator in a 
     labels:
       - "traefik.http.routers.example-app.middlewares=domain-auth"
 ```
-
-```sh
-# nestor/nestor.env
-(...)
-AUTH_MODE="domain"
-AUTH_DOMAIN_URL="https://auth.mydomain.com"
-```
-
-```dockerfile
-# nestor/Dockerfile
-# with nestor source in the `src` subdirectory
-FROM python:3.11-slim
-WORKDIR /code
-COPY ./src/requirements.txt /code/requirements.txt
-RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
-COPY ./src/. /code/
-
-EXPOSE 8123
-CMD ["uvicorn", "nestor:app", "--proxy-headers", "--host", "0.0.0.0", "--port", "8123", "--forwarded-allow-ips", "*"]
-```
