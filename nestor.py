@@ -28,6 +28,8 @@ ADMIN_PASSWORD = config("ADMIN_PASSWORD", cast=Secret)
 AUTH_MODE = config("AUTH_MODE", default="http")
 AUTH_DOMAIN_URL = config("AUTH_DOMAIN_URL", default="")
 BG_URL = config("BG_URL", default=None)
+OVERLAY_PATH = config("OVERLAY_PATH", default="/_nestor")
+COOKIE_NAME = config("COOKIE_NAME", default="_nestor_token")
 
 # Logging
 
@@ -75,25 +77,36 @@ def encode_authkey(paths):
     ).decode("utf8")
 
 
-def check_login(request):
+def check_login(request, path):
     """Helper that returns whether cookie allows current path"""
+
     logger.debug("checking login...")
 
     try:
-        paths = decode_authkey(request.cookies.get("nestor"))
+        paths = decode_authkey(request.cookies.get(COOKIE_NAME))
         logger.debug(f"Found cookie with paths: {paths}")
         assert isinstance(paths, list)
     except Exception as e:
         logger.debug(f"Unable to decode cookie : {e}")
         return False
 
-    return Auths(paths).check(request.headers.get("x-original-uri") or request.headers.get("x-forwarded-uri"))
+    if AUTH_MODE == "http":
+        return Auths(paths).check(path)
+    else:
+        return True
 
 
-class NestorCookieResponse(RedirectResponse):
-    def __init__(self, paths, redir):
-        super().__init__(url=redir, status_code=302)
-        self.set_cookie("nestor", encode_authkey(paths), path="/")
+def nestor_cookie(paths, redir, overlay):
+    token = encode_authkey(paths)
+    url = redir
+    if overlay:
+        params = {"redir": redir, "token": token}
+        redirect_params = urllib.parse.urlencode(params, safe="")
+        url = f"{overlay}?{redirect_params}"
+
+    resp = RedirectResponse(status_code=302, url=url)
+    resp.set_cookie(COOKIE_NAME, token, path="/")
+    return resp
 
 
 #
@@ -126,33 +139,48 @@ async def link(request):
 
     assert "authkey" in request.query_params
     paths = decode_authkey(request.query_params["authkey"])
-    return NestorCookieResponse(
+    return nestor_cookie(
         paths=paths,
         redir=request.query_params.get("redir", default=paths[0]),
+        overlay=None,
     )
 
 
 async def login(request):
     """POST view: Check for login"""
+
     logger.debug("login request")
     logger.debug("headers : {}".format(request.headers))
 
-    redir = None
+    if AUTH_MODE == "http":
+        redir = request.headers.get("x-original-uri")
+        overlay = None
+    else:
+        redir = request.query_params.get("redir")
+        overlay = request.query_params.get("overlay")
     if request.method == "POST":
         form = await request.form()
         password = form.get("password")
-        redir = form.get("next", "/")
+        redir = form.get("redir", redir)
+        overlay = form.get("overlay", overlay)
 
         if password == str(PASSWORD):
             logger.info("allowed access")
-            return NestorCookieResponse(["/"], redir)  # Default is full access
+            return nestor_cookie(
+                ["/"], redir=redir, overlay=overlay
+            )  # Default is full access
 
-    if check_login(request):
-        logger.debug("redirect : already logged in")
-        return RedirectResponse(url=redir or "/", status_code=302)
+    if redir and check_login(request, redir):
+        return nestor_cookie(["/"], redir=redir, overlay=overlay)
 
     return templates.TemplateResponse(
-        "login.html", context={"request": request, "redir": redir, "bg_url": BG_URL}
+        "login.html",
+        context={
+            "request": request,
+            "redir": redir,
+            "overlay": overlay,
+            "bg_url": BG_URL,
+        },
     )
 
 
@@ -161,29 +189,52 @@ async def auth_http(request):
     logger.debug("auth request")
     logger.debug("headers : {}".format(request.headers))
 
-    if check_login(request):
+    path = request.headers.get("x-original-uri")
+    if path and check_login(request, path):
         return Response("", status_code=200)
     else:
         return Response("", status_code=401)
 
+
 async def auth_domain(request):
-    """Auth check view, that will be called by Traefik domain-auth middleware"""
+    """Auth check view, that will be called by Traefik forward-auth middleware"""
+
     logger.debug("auth request")
     logger.debug("headers : {}".format(request.headers))
+    logger.debug(
+        f"check overlay : {request.headers.get('x-forwarded-uri')} == {OVERLAY_PATH}"
+    )
 
-    if check_login(request):
+    if check_login(request, None):
         return Response("", status_code=200)
+    elif request.headers.get("x-forwarded-uri").split("?")[0] == OVERLAY_PATH:
+        url = urllib.parse.urlparse(request.headers.get("x-forwarded-uri"))
+        params = urllib.parse.parse_qs(url.query)
+        redir = params.get("redir")
+        token = params.get("token")
+        if redir and token:
+            resp = RedirectResponse(url=redir[0], status_code=302)
+            resp.set_cookie(COOKIE_NAME, token[0], path="/")
+            return resp
+        else:
+            return "Wrong params"
     else:
         logger.debug("auth : redirect to login")
         proto = request.headers.get("x-forwarded-proto", "")
         host = request.headers.get("x-forwarded-host", "")
         uri = request.headers.get("x-forwarded-uri", "/")
         if proto and host:
-            params = {"redirect": proto + "://" + host + uri}
+            params = {
+                "redir": proto + "://" + host + uri,
+                "overlay": proto + "://" + host + OVERLAY_PATH,
+            }
             redirect_params = "?" + urllib.parse.urlencode(params, safe="")
+            return RedirectResponse(
+                url=AUTH_DOMAIN_URL + "/login" + redirect_params, status_code=302
+            )
         else:
-            redirect_params = ""
-        return RedirectResponse(url=AUTH_DOMAIN_URL + "/login" + redirect_params, status_code=302)
+            return "Missing headers"
+
 
 routes = [
     Route("/login", login, methods=["GET", "POST"]),
