@@ -15,6 +15,15 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Creating subdirectory url
+
+You have to use the "admin" endpoint that will generate a correct token for specific paths, e.g.
+
+```
+curl -d '["/photos/sub_albums/", "/photos/static/"]' -H 'X-NESTOR-ADMIN: a_very_secret_admin_pass' https://hostname.example/nestor/admin
+```
+
+
 ## Configuration
 
 Configuration is done via environment variable or using a `.env` file. Here is a list of options.
