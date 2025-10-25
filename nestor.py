@@ -27,6 +27,7 @@ PASSWORD = config("PASSWORD", cast=Secret)
 ADMIN_PASSWORD = config("ADMIN_PASSWORD", cast=Secret)
 AUTH_MODE = config("AUTH_MODE", default="http")
 AUTH_DOMAIN_URL = config("AUTH_DOMAIN_URL", default="")
+LOGIN_URL = config("LOGIN_URL", default=None)
 BG_URL = config("BG_URL", default=None)
 OVERLAY_PATH = config("OVERLAY_PATH", default="/_nestor")
 COOKIE_NAME = config("COOKIE_NAME", default="_nestor_token")
@@ -180,6 +181,7 @@ async def login(request):
             "redir": redir,
             "overlay": overlay,
             "bg_url": BG_URL,
+            "login_url": LOGIN_URL,
         },
     )
 

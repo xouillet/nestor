@@ -93,7 +93,7 @@ background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/s
     <h2>Missing redirection url...</h2>
 {% else %}
       <h1>Password protected</h1>
-      <form method="post" action="{{ url_for('login') }}">
+      <form method="post" action="{{ login_url if login_url else url_for('login') }}">
           <input type="hidden" name="redir" value="{{ redir }}" />
           {% if overlay %}
           <input type="hidden" name="overlay" value="{{ overlay }}" />
